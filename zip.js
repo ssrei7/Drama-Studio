@@ -39,12 +39,12 @@
       var data = bytes(file.text);
       var crc = crc32(data);
       var local = [].concat(
-        u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
         u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0)
       );
       parts.push(new Uint8Array(local), name, data);
       var entry = [].concat(
-        u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+        u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
         u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset)
       );
       central.push(new Uint8Array(entry), name);

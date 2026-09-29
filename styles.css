@@ -73,23 +73,29 @@ h1, h2, p { margin-top: 0; }
   backdrop-filter: blur(10px);
 }
 .title { width: 100%; border: 0; background: transparent; text-align: center; font-size: 18px; }
-.top-space { height: calc(74px + var(--safe-top)); }
+.top-space { height: calc(126px + var(--safe-top)); }
 .tip, .warn, .hint { margin: 0 16px 12px; color: var(--muted); }
 .tip, .warn {
   display: flex; justify-content: space-between; gap: 12px; align-items: center;
   padding: 10px 12px; border-radius: 14px; background: var(--paper);
 }
 .warn { color: var(--warn); }
+.pending {
+  position: fixed; z-index: 4; top: calc(112px + var(--safe-top)); left: 50%; transform: translateX(-50%);
+  width: min(820px, calc(100% - 24px)); margin: 0; box-sizing: border-box;
+}
+.tabs {
+  position: fixed; z-index: 3; top: calc(62px + var(--safe-top)); left: 50%; transform: translateX(-50%);
+  box-sizing: border-box; margin: 0; padding-bottom: 8px; background: var(--bg);
+}
+.pending::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
 .tabs { display: flex; gap: 6px; width: min(820px, calc(100% - 32px)); margin: 4px auto 12px; overflow-x: auto; }
 .tabs button { flex: 1 0 auto; }
 .tabs .on { background: var(--ink); color: var(--bg); border-color: transparent; }
 .panel { padding: 0 16px 28px; }
 .panel { width: min(820px, 100%); margin-inline: auto; }
-footer {
-  width: min(820px, 100%); margin-inline: auto;
-  display: flex; justify-content: space-between; gap: 12px; align-items: center;
-  padding: 8px 16px calc(16px + var(--safe-bottom)); color: var(--muted);
-}
+footer { display: none; }
 
 .line, .person, .empty {
   background: var(--paper); border-radius: 18px; padding: 12px; margin-bottom: 10px; box-shadow: var(--shadow);
@@ -105,7 +111,10 @@ footer {
 .pill.on { background: color-mix(in srgb, var(--ink) 12%, transparent); }
 select, textarea, .name, .emotion-label input, .title {
   border: 1px solid var(--line); border-radius: 12px; background: transparent; padding: 8px 10px;
+  font-size: 16px;
 }
+html { touch-action: manipulation; }
+.help { white-space: pre-wrap; }
 textarea { width: 100%; resize: vertical; min-height: 44px; }
 .text-label, .emotion-label { margin-top: 8px; }
 .emotion-label { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
@@ -162,6 +171,7 @@ textarea[readonly] { color: var(--muted); }
 .steps .next span { outline: 2px solid var(--accent); }
 .steps p { margin: 2px 0 0; color: var(--muted); }
 
+[hidden] { display: none !important; }
 #toast {
   position: fixed; z-index: 5; left: 50%; bottom: calc(18px + var(--safe-bottom)); transform: translateX(-50%);
   display: flex; gap: 10px; align-items: center; width: min(420px, calc(100% - 24px));
