@@ -37,10 +37,32 @@
     var id = el.getAttribute("data-id");
     if (action === "line-text") SG.setText(id, el.value);
     else if (action === "line-emotion") SG.setEmotion(id, el.value);
-    else if (action === "character-name") SG.setCharacterName(id, el.value);
+    else if (action === "character-body") SG.setCharacterBody(id, el.value);
+    else if (action === "book-body") SG.setBookBody(id, el.value);
+    else if (action === "persona-body") SG.setPersonaBody(id, el.value);
+    else if (action === "style-text") SG.setStyleText(id, el.value);
+    else if (action === "structure-text") SG.setStructureText(id, el.value);
     else if (action === "rename") SG.rename(el.value);
     else return;
     undo = null;
+  }
+
+  function named(action, id, value) {
+    try {
+      if (action === "character-name") SG.setCharacterName(id, value);
+      else if (action === "book-name") SG.setBookName(id, value);
+      else if (action === "persona-name") SG.setPersonaName(id, value);
+      else if (action === "style-name") SG.setStyleName(id, value);
+      else if (action === "structure-name") SG.setStructureName(id, value);
+      else return false;
+      undo = null;
+      return true;
+    } catch (err) {
+      if (err && err.code === "duplicate-name") toast("已经有同名的了，换一个名字", false);
+      else toast("名字没能保存", false);
+      render();
+      return true;
+    }
   }
 
   function readFile(file) {
@@ -52,8 +74,67 @@
     });
   }
 
-  function download(filename, text) {
-    var blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  function promptText(context) {
+    var blocks = [];
+    if (context.core) blocks.push("核心要求：\n" + context.core);
+    blocks.push("文风：\n" + context.style);
+    blocks.push("结构：\n" + context.structure);
+    if (context.persona) blocks.push("用户人设：\n" + context.persona);
+    if (context.characters) blocks.push("出场角色：\n" + context.characters);
+    if (context.books) blocks.push("世界书：\n" + context.books);
+    if (context.kind === "outline") {
+      blocks.push("先只写分集。每一集用「第 1 集：标题」开头，下一行写简介。不要写台词。");
+    } else {
+      if (context.episode) blocks.push("这一集：\n" + context.episode);
+      if (context.previous) blocks.push("上一集结尾：\n" + context.previous);
+      if (context.next) blocks.push("下一集开头：\n" + context.next);
+      if (context.locked) blocks.push("这些行已锁定，不要改写：\n" + context.locked);
+      blocks.push("按这个格式回稿：\n【林夏】\n你还没走。\n情绪：放轻\n我以为末班车会在路口等。\n\n【旁白】\n夜班公交已经停了。");
+    }
+    return blocks.join("\n\n");
+  }
+
+  function requestModel(context) {
+    var settings = SG.settings();
+    if (!settings.baseUrl || !settings.model || !settings.apiKey) return Promise.reject(new Error("接口还没填完整"));
+    return fetch(settings.baseUrl + "/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.apiKey },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [{ role: "user", content: promptText(context) }]
+      })
+    }).then(function (response) {
+      if (!response.ok) throw new Error("接口返回 " + response.status);
+      return response.json();
+    }).then(function (data) {
+      var text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+      if (!text) throw new Error("接口没有返回正文");
+      return String(text);
+    });
+  }
+
+  function ask(message) {
+    return Promise.resolve(window.confirm(message));
+  }
+
+  function readMaterial(file) {
+    var name = String(file && file.name || "").toLowerCase();
+    if (name.endsWith(".docx")) {
+      if (!window.SGDocx) return Promise.reject(new Error("读不到 docx"));
+      return window.SGDocx.textFromDocx(file);
+    }
+    if (name.endsWith(".doc")) return Promise.reject(new Error("只收 txt 和 docx"));
+    return readFile(file);
+  }
+
+  function focusName(action, id) {
+    var input = document.querySelector('[data-action="' + action + '"][data-id="' + id + '"]');
+    if (input) input.focus();
+  }
+
+  function download(filename, content, type) {
+    var blob = content instanceof Blob ? content : new Blob([content], { type: type || "text/plain;charset=utf-8" });
     var url = URL.createObjectURL(blob);
     var link = document.createElement("a");
     link.href = url;
@@ -62,6 +143,29 @@
     link.click();
     link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function exportFiles() {
+    var project = SG.current();
+    if (!project) return;
+    var choices = SG.ui.exportChoices || { html: true, voice: true, roles: true, tags: false };
+    var ids = [];
+    if (project.mode === "serial") {
+      project.episodes.forEach(function (episode) {
+        if (!SG.ui.exportEpisodes || SG.ui.exportEpisodes[episode.id] !== false) ids.push(episode.id);
+      });
+      if (!ids.length) { toast("先勾选至少一集", false); return; }
+    }
+    var base = SG.safeName(project.name);
+    var count = 0;
+    if (choices.html) { download(base + "-完整本.html", SG.fullHtml(project, ids), "text/html;charset=utf-8"); count += 1; }
+    if (choices.voice) { download(base + "-人声.txt", SG.voiceText(project, ids, SG.ui.voiceOmit || {}, !!choices.tags)); count += 1; }
+    if (choices.roles) {
+      var files = SG.roleTexts(project, ids, !!choices.tags);
+      if (!files.length) toast("勾选的音轨里没有角色台词", false);
+      else if (window.SGZip) { download(base + "-按角色.zip", window.SGZip.zip(files), "application/zip"); count += 1; }
+    }
+    if (count) toast("已开始下载 " + count + " 个文件", false);
   }
 
   function copyText(text) {
@@ -95,6 +199,8 @@
     if (action === "tab") {
       SG.ui.tab = el.getAttribute("data-tab");
       render();
+      var current = document.querySelector(".tabs .on");
+      if (current && current.scrollIntoView) current.scrollIntoView({ inline: "center", block: "nearest" });
       return;
     }
     if (action === "show-projects") { SG.ui.sheet = "projects"; render(); return; }
@@ -171,14 +277,111 @@
     if (action === "add-character") {
       var person = SG.addCharacter();
       render();
-      var input = document.querySelector('[data-action="character-name"][data-id="' + person + '"]');
-      if (input) input.focus();
+      focusName("character-name", person);
       return;
     }
     if (action === "delete-character") {
       remember();
       SG.deleteCharacter(id);
       changed("已删除角色");
+      return;
+    }
+    if (action === "add-book") {
+      var book = SG.addBook();
+      render();
+      focusName("book-name", book);
+      return;
+    }
+    if (action === "delete-book") {
+      remember();
+      SG.deleteBook(id);
+      changed("已删除世界书");
+      return;
+    }
+    if (action === "add-persona") {
+      var persona = SG.addPersona();
+      render();
+      focusName("persona-name", persona);
+      return;
+    }
+    if (action === "delete-persona") {
+      remember();
+      SG.deletePersona(id);
+      changed("已删除人设");
+      return;
+    }
+    if (action === "use-persona") { SG.usePersona(id); render(); return; }
+    if (action === "add-style") {
+      var style = SG.addStyle();
+      render();
+      focusName("style-name", style);
+      return;
+    }
+    if (action === "copy-style") {
+      var styleCopy = SG.duplicateStyle(id);
+      render();
+      focusName("style-name", styleCopy);
+      return;
+    }
+    if (action === "delete-style") {
+      if (!SG.deleteStyle(id)) { toast("内置文风不能删", false); return; }
+      render();
+      toast("已删除文风", false);
+      return;
+    }
+    if (action === "use-style") { SG.useStyle(id); render(); return; }
+    if (action === "add-structure") {
+      var structure = SG.addStructure();
+      render();
+      focusName("structure-name", structure);
+      return;
+    }
+    if (action === "copy-structure") {
+      var structureCopy = SG.duplicateStructure(id);
+      render();
+      focusName("structure-name", structureCopy);
+      return;
+    }
+    if (action === "delete-structure") {
+      if (!SG.deleteStructure(id)) { toast("内置结构不能删", false); return; }
+      render();
+      toast("已删除结构", false);
+      return;
+    }
+    if (action === "use-structure") { SG.useStructure(id); render(); return; }
+    if (action === "open-episode") { SG.openEpisode(id); render(); return; }
+    if (action === "add-folder") { var folder = SG.addFolder(); render(); focusName("folder-name", folder); return; }
+    if (action === "delete-folder") { SG.deleteFolder(id); render(); toast("里面的稿已移到未分类", false); return; }
+    if (action === "delete-draft") { SG.deleteDraft(id); render(); return; }
+    if (action === "delete-draft-line") { SG.deleteDraftLine(id, Number(el.getAttribute("data-index"))); render(); return; }
+    if (action === "adopt-draft") {
+      ask("采用这份稿，会替换当前没锁定的行。锁定的行不动。").then(function (ok) {
+        if (!ok) return;
+        if (!SG.adoptDraft(id)) { toast("这份稿还不能采用", false); return; }
+        SG.ui.tab = "director";
+        changed("已采用");
+      });
+      return;
+    }
+    if (action === "fetch-models") {
+      var settings = SG.settings();
+      if (!settings.baseUrl || !settings.apiKey) { toast("先填接口地址和密钥", false); return; }
+      fetch(settings.baseUrl + "/models", { headers: { Authorization: "Bearer " + settings.apiKey } }).then(function (response) {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json();
+      }).then(function (data) {
+        var names = ((data && data.data) || []).map(function (item) { return item.id; }).filter(Boolean);
+        if (!names.length) throw new Error("empty");
+        var picked = window.prompt("拉取到这些模型，把要用的名字粘回去：\n" + names.join("\n"), names[0]);
+        if (!picked) return;
+        SG.saveSettings({ model: picked });
+        render();
+      }).catch(function () { toast("没能拉取，可以手填模型名", false); });
+      return;
+    }
+    if (action === "save-settings") { SG.saveSettings({}); toast("接口已保存", false); return; }
+    if (action === "generate-outline" || action === "generate-short" || action === "generate-episode" || action === "generate-all") {
+      runGenerate(action, id);
       return;
     }
     if (action === "copy-voice") {
@@ -200,6 +403,50 @@
     }
   }
 
+  function runGenerate(action, id) {
+    var project = SG.current();
+    if (!project) return;
+    var count = action === "generate-all" ? project.episodes.length : 1;
+    if (!count) { toast("还没有分集", false); return; }
+    ask("这次将请求 " + count + " 次。生成稿单独保存，不会直接改导演本。").then(function (ok) {
+      if (!ok) return;
+      toast("正在请求", true);
+      var job;
+      if (action === "generate-outline") job = requestModel(SG.generationContext("outline")).then(function (text) {
+        var items = SG.parseOutline(text);
+        if (!items.length) throw new Error("没有认出分集");
+        SG.saveOutline(items);
+        SG.saveDraft(text, "分集大纲", "");
+      });
+      else if (action === "generate-short") job = requestModel(SG.generationContext("script")).then(function (text) {
+        SG.saveDraft(text, "短篇生成稿", "");
+      });
+      else if (action === "generate-episode") job = requestModel(SG.generationContext("script", project.episodes.filter(function (item) { return item.id === id; })[0])).then(function (text) {
+        SG.saveDraft(text, "单集生成稿", "");
+      });
+      else {
+        var index = 0;
+        job = Promise.resolve();
+        project.episodes.forEach(function (episode) {
+          job = job.then(function () {
+            index += 1;
+            toast("正在请求 " + index + " / " + count, true);
+            return requestModel(SG.generationContext("script", episode)).then(function (text) {
+              SG.saveDraft(text, episode.title || ("第" + index + "集"), "");
+            });
+          });
+        });
+      }
+      job.then(function () {
+        render();
+        toast("已保存生成稿", false);
+      }).catch(function (err) {
+        render();
+        toast(err && err.message ? err.message : "请求停了，已经得到的稿还在", false);
+      });
+    });
+  }
+
   function focusLine(id) {
     var area = document.querySelector('[data-action="line-text"][data-id="' + id + '"]');
     if (area) area.focus();
@@ -214,6 +461,87 @@
     if (action === "line-speaker") { SG.setSpeaker(id, el.value); render(); return; }
     if (action === "character-color") { SG.setCharacterColor(id, el.value); render(); return; }
     if (action === "monologue") { SG.setIncludeMonologue(el.checked); render(); return; }
+    if (action === "omit-voice") {
+      if (!SG.ui.voiceOmit) SG.ui.voiceOmit = {};
+      if (el.checked) delete SG.ui.voiceOmit[id];
+      else SG.ui.voiceOmit[id] = true;
+      render();
+      return;
+    }
+    if (action === "export-choice") {
+      if (!SG.ui.exportChoices) SG.ui.exportChoices = { html: true, voice: true, roles: true, tags: false };
+      SG.ui.exportChoices[el.getAttribute("data-kind")] = el.checked;
+      render();
+      return;
+    }
+    if (action === "export-episode") {
+      if (!SG.ui.exportEpisodes) SG.ui.exportEpisodes = {};
+      SG.ui.exportEpisodes[id] = el.checked;
+      return;
+    }
+    if (action === "export-files") {
+      exportFiles();
+      return;
+    }
+    if (action === "copy-platform-template") {
+      copyText(SG.platformTemplate());
+      toast("模板已复制。左边是台词里的名字，右边是平台标记。", false);
+      return;
+    }
+    if (action === "platform-help") {
+      window.alert("台词里用普通括号写标记名，例如：妈妈，(轻笑)我饿了。\n\n换平台时，点复制模板，把每一行右边换成那个平台要的标记，保存成 txt。再点导入标签预设。可以选择另存一套，或替换当前这套。\n\n停顿可以写范围，例如 <#0.2-0.6#>。每次导出会在范围内随机取一个数。\n\n勾选平台标签后，只替换纯人声 TXT 和按角色拆开的 TXT。预设里没有的括号会原样保留。");
+      return;
+    }
+    if (action === "link-book") {
+      SG.toggleBookLink(el.getAttribute("data-id"), el.getAttribute("data-book"));
+      render();
+      return;
+    }
+    if (action === "cast") {
+      SG.toggleCast(el.getAttribute("data-id"));
+      render();
+      return;
+    }
+    if (action === "upload-material" || action === "upload-persona") {
+      var material = el.files && el.files[0];
+      var kind = el.getAttribute("data-kind") || "character";
+      el.value = "";
+      if (!material) return;
+      readMaterial(material).then(function (text) {
+        var prepared = SG.prepareText(text);
+        if (!prepared.text) { toast("这份文件没有正文", false); return; }
+        remember();
+        var created = action === "upload-persona" ? SG.importPersona(prepared.text) : SG.importMaterial(kind, prepared.text);
+        changed(prepared.truncated ? "已导入前 20000 字，后面没有收" : "已导入，名称留空，请自己填");
+        if (action === "upload-persona") focusName("persona-name", created);
+        else focusName(kind === "book" ? "book-name" : "character-name", created);
+      }).catch(function () {
+        toast("只收 txt 和 docx 的正文", false);
+      });
+      return;
+    }
+    if (action === "upload-platform") {
+      var preset = el.files && el.files[0];
+      el.value = "";
+      if (!preset) return;
+      readFile(preset).then(function (text) {
+        var rows = SG.parsePlatform(text);
+        if (!rows.length) { toast("没有认出标签。一行写：名字 标记", false); return; }
+        var current = SG.activePlatform();
+        var mode = current && window.confirm("替换当前这套「" + (current.name || "未命名") + "」吗？点取消则另存一套。") ? "replace" : "new";
+        var fallback = String(preset.name || "平台标签").replace(/\.txt$/i, "");
+        var name = window.prompt("预设名称", mode === "replace" ? current.name : fallback);
+        if (!name) return;
+        try {
+          SG.savePlatform(name, text, mode === "replace" ? current.id : "");
+          render();
+          toast(mode === "replace" ? "已替换当前预设" : "已另存一套预设", false);
+        } catch (err) {
+          toast(err && err.code === "duplicate-name" ? "已经有同名预设" : "预设没有保存", false);
+        }
+      }).catch(function () { toast("读不到这个文件", false); });
+      return;
+    }
     if (action === "upload-backup") {
       var file = el.files && el.files[0];
       el.value = "";
@@ -221,10 +549,16 @@
       readFile(file).then(function (text) {
         var data = JSON.parse(text);
         remember();
-        SG.importProject(data);
+        var imported = SG.importProject(data);
         SG.ui.tab = "director";
         SG.ui.sheet = null;
         changed("已导入备份");
+        if (imported && imported.hasKey) {
+          ask("这份备份里有密钥。用它覆盖这台设备上的密钥吗？").then(function (ok) {
+            if (ok) SG.applyBackupSettings(data);
+            render();
+          });
+        }
       }).catch(function () {
         toast("这个文件不是台本工作室备份", false);
       });
@@ -233,7 +567,16 @@
 
   document.addEventListener("click", onClick);
   document.addEventListener("input", field);
-  document.addEventListener("change", onChange);
+  document.addEventListener("change", function (event) {
+    var el = event.target;
+    if (!el || !el.getAttribute) return;
+    var action = el.getAttribute("data-action");
+    if (action === "character-name" || action === "book-name" || action === "persona-name" || action === "style-name" || action === "structure-name") {
+      named(action, el.getAttribute("data-id"), el.value);
+      return;
+    }
+    onChange(event);
+  });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && SG.ui.sheet) {
       SG.ui.sheet = null;
